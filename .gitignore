@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyc.*
+
+# Virtual Environment
+rag-env/
+venv/
+.env/
+
+# Environment Variables
+.env
+.env.*
+
+# MacOS
+.DS_Store
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Uploaded files
+temp_uploads/
+
+# Vector DB / embeddings
+chroma_db/
+vector_store/
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# Streamlit
+.streamlit/
+
+# Testing
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
