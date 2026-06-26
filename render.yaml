@@ -11,8 +11,6 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
-      - key: COHERE_API_KEY
-        sync: false
       - key: PDF_PARSE_STRATEGY
         value: fast
       - key: RETRIEVER_MODE

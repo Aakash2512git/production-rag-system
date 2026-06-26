@@ -5,9 +5,6 @@ WORKDIR /app
 COPY requirements-prod.txt .
 RUN pip install --no-cache-dir -r requirements-prod.txt
 
-# Pre-download embedding model at build time (not on each cold start)
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
 COPY app ./app
 
 EXPOSE 10000
