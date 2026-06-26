@@ -17,6 +17,8 @@ services:
         sync: false
       - key: COHERE_API_KEY
         sync: false
+      - key: PDF_PARSE_STRATEGY
+        value: fast
 
   - type: web
     name: rag-streamlit
