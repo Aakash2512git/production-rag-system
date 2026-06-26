@@ -9,7 +9,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from langchain_classic.retrievers import ContextualCompressionRetriever
 
-from langchain_cohere import CohereRagRetriever, ChatCohere ,CohereRerank
+from langchain_cohere import CohereRerank
 from langchain_groq import ChatGroq
 
 from app.retrieval.mutiquery import CustomMultiQueryRetriever
@@ -98,16 +98,11 @@ def build_retriever(documents):
     if not cohere_key:
         raise ValueError("COHERE_API_KEY not set in .env")
 
-    cohere_llm = ChatCohere(
-        model="command-r",
-        cohere_api_key=cohere_key
-    )
-
     compressor = CohereRerank(
-    model="rerank-english-v3.0",
-    cohere_api_key=cohere_key,
-    top_n=5
-)
+        model="rerank-english-v3.0",
+        cohere_api_key=cohere_key,
+        top_n=5,
+    )
 
     logger.info("Cohere reranker initialized")
 

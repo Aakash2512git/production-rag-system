@@ -25,6 +25,17 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "RAG Pipeline API",
+        "health": "/health",
+        "docs": "/docs",
+        "ingest": "POST /api/ingest",
+        "query": "POST /api/query",
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}

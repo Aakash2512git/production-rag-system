@@ -1,8 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+import asyncio
+import logging
+import os
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import List
-import os
-import logging
 
 router = APIRouter()
 retriever = None
@@ -20,6 +22,26 @@ def get_llm_client():
     return _llm_client
 
 
+def _run_ingest(file_location: str):
+    from langchain_classic.schema import Document
+    from app.ingestion.pdf_ingestion_pipeline import ingest_file
+    from app.retrieval.retriever import build_retriever
+
+    logger.info("Starting ingestion for %s", file_location)
+    chunks = ingest_file(file_location)
+    if not chunks:
+        raise ValueError("No text chunks extracted")
+
+    documents = [
+        Document(page_content=chunk["text"], metadata=chunk["metadata"])
+        for chunk in chunks
+    ]
+    logger.info("Building retriever for %d chunks", len(documents))
+    new_retriever = build_retriever(documents)
+    logger.info("Ingestion complete: %d chunks", len(documents))
+    return new_retriever, len(documents)
+
+
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -34,34 +56,21 @@ class QueryResponse(BaseModel):
 async def ingest(file: UploadFile = File(...)):
     global retriever
 
-    from langchain_classic.schema import Document
-    from app.ingestion.pdf_ingestion_pipeline import ingest_file
-    from app.retrieval.retriever import build_retriever
-    from app.retrieval.vector_store import get_vector_store
-
     try:
         file_location = f"temp_uploads/{file.filename}"
         os.makedirs("temp_uploads", exist_ok=True)
         with open(file_location, "wb") as f:
             f.write(await file.read())
 
-        ingest_file(file_location)
+        new_retriever, chunk_count = await asyncio.to_thread(_run_ingest, file_location)
+        retriever = new_retriever
 
-        store = get_vector_store()
-        documents = [
-            Document(page_content=doc["text"], metadata=doc["metadata"])
-            for doc in store.documents
-        ]
-        if not documents:
-            raise HTTPException(status_code=400, detail="No text chunks extracted")
-
-        retriever = build_retriever(documents)
-        logger.info(f"Retriever pipeline built with {len(documents)} chunks")
-
-        return {"message": f"File ingested successfully with {len(documents)} chunks."}
+        return {"message": f"File ingested successfully with {chunk_count} chunks."}
 
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Error during ingestion")
         raise HTTPException(status_code=500, detail=str(e))
@@ -75,12 +84,13 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=400, detail="No documents ingested yet.")
 
     try:
-        docs = retriever.invoke(request.query)
+        docs = await asyncio.to_thread(retriever.invoke, request.query)
         chunks = [doc.page_content for doc in docs]
 
-        answer = get_llm_client().generate_answer(
-            query=request.query,
-            context_chunks=chunks,
+        answer = await asyncio.to_thread(
+            get_llm_client().generate_answer,
+            request.query,
+            chunks,
         )
 
         return QueryResponse(answer=answer, sources=chunks)

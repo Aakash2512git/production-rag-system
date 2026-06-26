@@ -3,8 +3,6 @@ from typing import List
 
 from langchain_groq import ChatGroq
 
-from app.retrieval.vector_store import vector_store
-
 PDF_PARSE_STRATEGY = os.getenv("PDF_PARSE_STRATEGY", "fast")
 ENRICH_CHUNK_QUESTIONS = os.getenv("ENRICH_CHUNK_QUESTIONS", "false").lower() == "true"
 
@@ -48,38 +46,42 @@ def _chunk_text(text: str, chunk_size: int = 2400, overlap: int = 200) -> List[s
     return [c for c in chunks if c]
 
 
-def ingest_txt(file_path: str) -> int:
+def _make_chunk(text: str, filename: str) -> dict:
+    metadata = {
+        "source": filename,
+        "keywords": extract_keywords(text),
+        "type": "text",
+    }
+    if ENRICH_CHUNK_QUESTIONS:
+        metadata["questions"] = generate_questions(text)
+    return {"text": text, "metadata": metadata}
+
+
+def ingest_txt(file_path: str) -> List[dict]:
     filename = os.path.basename(file_path)
     with open(file_path, encoding="utf-8", errors="ignore") as f:
         text = f.read()
-
-    stored_chunks = 0
-    for chunk_text in _chunk_text(text):
-        metadata = {
-            "source": filename,
-            "keywords": extract_keywords(chunk_text),
-            "type": "text",
-        }
-        if ENRICH_CHUNK_QUESTIONS:
-            metadata["questions"] = generate_questions(chunk_text)
-
-        vector_store.add_text(text=chunk_text, metadata=metadata)
-        stored_chunks += 1
-
-    return stored_chunks
+    return [_make_chunk(chunk_text, filename) for chunk_text in _chunk_text(text)]
 
 
-def ingest_file(file_path: str) -> int:
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
+def ingest_pdf_pypdf(file_path: str) -> List[dict]:
+    from pypdf import PdfReader
 
     filename = os.path.basename(file_path)
-    if filename.lower().endswith(".txt"):
-        return ingest_txt(file_path)
+    reader = PdfReader(file_path)
+    pages = [page.extract_text() or "" for page in reader.pages]
+    full_text = "\n".join(pages).strip()
+    if not full_text:
+        raise ValueError("No text could be extracted from this PDF (it may be scanned/image-only).")
 
+    return [_make_chunk(chunk_text, filename) for chunk_text in _chunk_text(full_text)]
+
+
+def ingest_pdf_unstructured(file_path: str) -> List[dict]:
     from unstructured.chunking.title import chunk_by_title
     from unstructured.partition.pdf import partition_pdf
 
+    filename = os.path.basename(file_path)
     print(f"Partitioning document: {file_path} (strategy={PDF_PARSE_STRATEGY})")
 
     partition_kwargs = {
@@ -94,11 +96,7 @@ def ingest_file(file_path: str) -> int:
         })
 
     elements = partition_pdf(**partition_kwargs)
-    print(f"Extracted {len(elements)} elements")
-
-    images = [el for el in elements if el.category == "Image"]
     tables = [el for el in elements if el.category == "Table"]
-    print(f"Found {len(images)} images, {len(tables)} tables")
 
     chunks = chunk_by_title(
         elements,
@@ -106,9 +104,8 @@ def ingest_file(file_path: str) -> int:
         new_after_n_chars=2400,
         combine_text_under_n_chars=500,
     )
-    print(f"Created {len(chunks)} chunks")
 
-    stored_chunks = 0
+    results = []
     for chunk in chunks:
         chunk_text = chunk.text
         if isinstance(chunk_text, list):
@@ -125,9 +122,7 @@ def ingest_file(file_path: str) -> int:
         })
         if ENRICH_CHUNK_QUESTIONS:
             metadata["questions"] = generate_questions(chunk_text)
-
-        vector_store.add_text(text=chunk_text, metadata=metadata)
-        stored_chunks += 1
+        results.append({"text": chunk_text, "metadata": metadata})
 
     for table in tables:
         html = getattr(table.metadata, "text_as_html", "")
@@ -135,10 +130,23 @@ def ingest_file(file_path: str) -> int:
             html = " ".join(str(t) for t in html)
         html = html.strip()
         if html:
-            vector_store.add_text(
-                text=html,
-                metadata={"source": filename, "type": "table"},
-            )
+            results.append({
+                "text": html,
+                "metadata": {"source": filename, "type": "table"},
+            })
 
-    print(f"Ingested {stored_chunks} chunks")
-    return stored_chunks
+    return results
+
+
+def ingest_file(file_path: str) -> List[dict]:
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    filename = os.path.basename(file_path)
+    if filename.lower().endswith(".txt"):
+        return ingest_txt(file_path)
+
+    if PDF_PARSE_STRATEGY == "fast":
+        return ingest_pdf_pypdf(file_path)
+
+    return ingest_pdf_unstructured(file_path)
