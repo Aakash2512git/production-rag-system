@@ -38,4 +38,9 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    groq_configured = bool((os.getenv("GROQ_API_KEY") or "").strip())
+    return {
+        "status": "ok",
+        "groq_api_key_configured": groq_configured,
+        "retriever_mode": os.getenv("RETRIEVER_MODE", "full"),
+    }
