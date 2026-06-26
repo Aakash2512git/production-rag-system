@@ -1,13 +1,12 @@
 import os
 from typing import List
 
-from langchain_groq import ChatGroq
-
 PDF_PARSE_STRATEGY = os.getenv("PDF_PARSE_STRATEGY", "fast")
 ENRICH_CHUNK_QUESTIONS = os.getenv("ENRICH_CHUNK_QUESTIONS", "false").lower() == "true"
 
 
 def get_llm():
+    from langchain_groq import ChatGroq
     return ChatGroq(
         model="llama-3.1-8b-instant",
         temperature=0,

@@ -19,8 +19,21 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+RETRIEVER_MODE = os.getenv("RETRIEVER_MODE", "full").lower()
+
+
+def build_lite_retriever(documents):
+    """BM25-only retriever — fast ingest, fits Render free tier."""
+    logger.info("Building lite (BM25) retriever with %d documents", len(documents))
+    bm25_retriever = BM25Retriever.from_documents(documents)
+    bm25_retriever.k = 5
+    logger.info("Lite retriever ready")
+    return bm25_retriever
+
 
 def build_retriever(documents):
+    if RETRIEVER_MODE == "lite":
+        return build_lite_retriever(documents)
 
     logger.info(f"Building retriever with {len(documents)} documents")
 
