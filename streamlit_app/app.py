@@ -2,27 +2,36 @@ import os
 
 import requests
 import streamlit as st
+from requests.exceptions import ChunkedEncodingError, ConnectionError, RequestException, Timeout
 
 _base_url = os.getenv("API_URL", "http://localhost:8000/api").rstrip("/")
 API_URL = _base_url if _base_url.endswith("/api") else f"{_base_url}/api"
-INGEST_TIMEOUT = int(os.getenv("INGEST_TIMEOUT", "600"))
+INGEST_TIMEOUT = int(os.getenv("INGEST_TIMEOUT", "300"))
 QUERY_TIMEOUT = int(os.getenv("QUERY_TIMEOUT", "120"))
 
 
 def api_post(path: str, timeout: int, **kwargs) -> requests.Response | None:
+    url = f"{API_URL}{path}"
     try:
-        return requests.post(f"{API_URL}{path}", timeout=timeout, **kwargs)
-    except requests.exceptions.ConnectionError:
+        response = requests.post(url, timeout=timeout, **kwargs)
+        return response
+    except Timeout:
         st.error(
-            "Cannot reach the backend API. It may have crashed or restarted — "
-            "this often happens when Docker runs out of memory during PDF processing. "
-            "Wait ~30 seconds and try again, use a smaller PDF, or increase Docker memory to 8GB."
+            f"Request timed out after {timeout}s. "
+            "Try a smaller TXT file, or wait for the backend to finish waking up (free tier cold start)."
         )
         return None
-    except requests.exceptions.Timeout:
+    except (ConnectionError, ChunkedEncodingError):
         st.error(
-            f"Request timed out after {timeout}s. Large PDFs can take several minutes — try again or use a smaller file."
+            "Backend connection dropped during processing. This usually means:\n\n"
+            "1. **Render free tier timeout** (~100s) — set `RETRIEVER_MODE=lite` on the backend\n"
+            "2. **Backend OOM restart** — use a smaller file or upgrade to Starter ($7/mo)\n"
+            "3. **Wrong API_URL** — confirm Streamlit env points to your backend URL\n\n"
+            f"Backend URL in use: `{API_URL}`"
         )
+        return None
+    except RequestException as exc:
+        st.error(f"API request failed: {exc}")
         return None
 
 
@@ -34,6 +43,14 @@ st.set_page_config(
 
 st.title("📚 RAG Document Chat")
 st.write("Upload documents and ask questions.")
+
+with st.sidebar.expander("Backend connection"):
+    st.code(API_URL, language=None)
+    try:
+        health = requests.get(API_URL.replace("/api", "") + "/health", timeout=10)
+        st.success(f"Backend: {health.json()}" if health.ok else f"Health check failed ({health.status_code})")
+    except RequestException:
+        st.error("Cannot reach backend /health")
 
 st.sidebar.header("Upload Documents")
 
@@ -47,7 +64,7 @@ if st.sidebar.button("Ingest Documents"):
     if not uploaded_files:
         st.sidebar.warning("Upload at least one file")
     else:
-        with st.spinner("Uploading and processing documents (may take a few minutes)..."):
+        with st.spinner("Uploading and processing documents..."):
             success = True
             for uploaded_file in uploaded_files:
                 response = api_post(
@@ -57,7 +74,7 @@ if st.sidebar.button("Ingest Documents"):
                         "file": (
                             uploaded_file.name,
                             uploaded_file.getvalue(),
-                            uploaded_file.type,
+                            uploaded_file.type or "application/octet-stream",
                         )
                     },
                 )
@@ -66,11 +83,11 @@ if st.sidebar.button("Ingest Documents"):
                     break
                 if response.status_code != 200:
                     success = False
-                    st.sidebar.error(response.text)
+                    st.sidebar.error(response.text or f"Ingest failed (HTTP {response.status_code})")
                     break
 
-        if success:
-            st.sidebar.success("Documents ingested successfully!")
+            if success:
+                st.sidebar.success("Documents ingested successfully!")
 
 st.header("Ask a Question")
 
@@ -92,10 +109,10 @@ if st.button("Ask"):
             data = response.json()
             st.subheader("Answer")
             st.write(data["answer"])
-            if "sources" in data:
+            if data.get("sources"):
                 with st.expander("Sources"):
                     for i, src in enumerate(data["sources"], 1):
                         st.markdown(f"**Source {i}**")
                         st.write(src)
         else:
-            st.error(response.text)
+            st.error(response.text or f"Query failed (HTTP {response.status_code})")

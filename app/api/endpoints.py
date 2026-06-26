@@ -23,7 +23,7 @@ def get_llm_client():
 
 
 def _run_ingest(file_location: str):
-    from langchain_classic.schema import Document
+    from langchain_core.documents import Document
     from app.ingestion.pdf_ingestion_pipeline import ingest_file
     from app.retrieval.retriever import build_retriever
 
