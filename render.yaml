@@ -1,0 +1,31 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Deploy: Render Dashboard -> New -> Blueprint -> connect this repo
+#
+# Free tier notes:
+# - Backend may need Starter plan ($7/mo) if the free 512MB RAM is not enough for ML deps.
+# - Services spin down after ~15 min idle (cold start ~1-3 min).
+
+services:
+  - type: web
+    name: rag-backend
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
+
+  - type: web
+    name: rag-streamlit
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile.streamlit
+    plan: free
+    envVars:
+      - key: API_URL
+        fromService:
+          name: rag-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL

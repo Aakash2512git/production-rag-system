@@ -1,30 +1,27 @@
 import os
 from typing import List
-from unstructured.partition.pdf import partition_pdf
-from unstructured.chunking.title import chunk_by_title
+
 from langchain_groq import ChatGroq
 
 from app.retrieval.vector_store import vector_store
 
+PDF_PARSE_STRATEGY = os.getenv("PDF_PARSE_STRATEGY", "fast")
+ENRICH_CHUNK_QUESTIONS = os.getenv("ENRICH_CHUNK_QUESTIONS", "false").lower() == "true"
 
-# ---------- LLM Setup ----------
+
 def get_llm():
     return ChatGroq(
         model="llama-3.1-8b-instant",
-        temperature=0
+        temperature=0,
     )
 
 
 def extract_keywords(text: str, max_keywords: int = 8) -> List[str]:
-    """Simple keyword extractor."""
     words = [w.lower() for w in text.split() if len(w) > 4]
-    unique = list(set(words))
-    return unique[:max_keywords]
+    return list(set(words))[:max_keywords]
 
 
 def generate_questions(text: str) -> List[str]:
-    """Use LLM to generate questions about a chunk."""
-
     prompt = f"""
 Generate 3 questions a user might ask about the following text.
 
@@ -33,117 +30,115 @@ Text:
 
 Return only the questions, one per line.
 """
-    llm=get_llm()
     try:
-        response = llm.invoke(prompt)
+        response = get_llm().invoke(prompt)
         lines = response.content.split("\n")
-
-        questions = [
-            q.strip("- ").strip()
-            for q in lines
-            if q.strip()
-        ]
-
-        return questions[:3]
-
+        return [q.strip("- ").strip() for q in lines if q.strip()][:3]
     except Exception:
         return []
 
 
-def ingest_file(file_path: str) -> int:
-    """
-    Load a PDF, extract text/tables/images, create smart chunks,
-    enrich them with metadata, and add them to the vector store.
-    """
+def _chunk_text(text: str, chunk_size: int = 2400, overlap: int = 200) -> List[str]:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end].strip())
+        start = end - overlap
+    return [c for c in chunks if c]
 
+
+def ingest_txt(file_path: str) -> int:
+    filename = os.path.basename(file_path)
+    with open(file_path, encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+
+    stored_chunks = 0
+    for chunk_text in _chunk_text(text):
+        metadata = {
+            "source": filename,
+            "keywords": extract_keywords(chunk_text),
+            "type": "text",
+        }
+        if ENRICH_CHUNK_QUESTIONS:
+            metadata["questions"] = generate_questions(chunk_text)
+
+        vector_store.add_text(text=chunk_text, metadata=metadata)
+        stored_chunks += 1
+
+    return stored_chunks
+
+
+def ingest_file(file_path: str) -> int:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
     filename = os.path.basename(file_path)
+    if filename.lower().endswith(".txt"):
+        return ingest_txt(file_path)
 
-    print(f"📄 Partitioning document: {file_path}")
+    from unstructured.chunking.title import chunk_by_title
+    from unstructured.partition.pdf import partition_pdf
 
-    # ---------- 1. Partition PDF ----------
-    elements = partition_pdf(
-        filename=file_path,
-        strategy="hi_res",
-        infer_table_structure=True,
-        extract_image_block_types=["Image"],
-        extract_image_block_to_payload=True
-    )
+    print(f"Partitioning document: {file_path} (strategy={PDF_PARSE_STRATEGY})")
 
-    print(f"✅ Extracted {len(elements)} elements")
+    partition_kwargs = {
+        "filename": file_path,
+        "strategy": PDF_PARSE_STRATEGY,
+    }
+    if PDF_PARSE_STRATEGY == "hi_res":
+        partition_kwargs.update({
+            "infer_table_structure": True,
+            "extract_image_block_types": ["Image"],
+            "extract_image_block_to_payload": True,
+        })
 
-    # ---------- 2. Separate images and tables ----------
+    elements = partition_pdf(**partition_kwargs)
+    print(f"Extracted {len(elements)} elements")
+
     images = [el for el in elements if el.category == "Image"]
     tables = [el for el in elements if el.category == "Table"]
-
-    print(f"🖼 Found {len(images)} images")
-    print(f"📊 Found {len(tables)} tables")
-
-    # ---------- 3. Create intelligent chunks ----------
-    print("🔨 Creating smart chunks...")
+    print(f"Found {len(images)} images, {len(tables)} tables")
 
     chunks = chunk_by_title(
         elements,
         max_characters=3000,
         new_after_n_chars=2400,
-        combine_text_under_n_chars=500
+        combine_text_under_n_chars=500,
     )
-
-    print(f"✅ Created {len(chunks)} chunks")
+    print(f"Created {len(chunks)} chunks")
 
     stored_chunks = 0
-
-    # ---------- 4. Add chunks to vector store ----------
     for chunk in chunks:
         chunk_text = chunk.text
         if isinstance(chunk_text, list):
-         chunk_text = " ".join([str(t) for t in chunk_text])
-
-         
-        chunk_text = chunk_text.strip() 
+            chunk_text = " ".join(str(t) for t in chunk_text)
+        chunk_text = chunk_text.strip()
         if not chunk_text:
             continue
 
-        # Generate metadata
-        metadata = {}
-
-        if chunk.metadata:
-            metadata = chunk.metadata.to_dict()
-
+        metadata = chunk.metadata.to_dict() if chunk.metadata else {}
         metadata.update({
             "source": filename,
             "keywords": extract_keywords(chunk_text),
-            "questions": generate_questions(chunk_text),
-            "type": "text"
+            "type": "text",
         })
+        if ENRICH_CHUNK_QUESTIONS:
+            metadata["questions"] = generate_questions(chunk_text)
 
-        vector_store.add_text(
-            text=chunk_text,
-            metadata=metadata
-        )
-
+        vector_store.add_text(text=chunk_text, metadata=metadata)
         stored_chunks += 1
 
-    # ---------- 5. Store tables ----------
     for table in tables:
-
         html = getattr(table.metadata, "text_as_html", "")
         if isinstance(html, list):
-            html = " ".join([str(t) for t in html])
+            html = " ".join(str(t) for t in html)
         html = html.strip()
-
         if html:
-
             vector_store.add_text(
                 text=html,
-                metadata={
-                    "source": filename,
-                    "type": "table"
-                }
+                metadata={"source": filename, "type": "table"},
             )
 
-    print(f"✅ Ingested {stored_chunks} chunks")
-
+    print(f"Ingested {stored_chunks} chunks")
     return stored_chunks

@@ -1,17 +1,30 @@
-# app/main.py
 from fastapi import FastAPI
-from app.api.endpoints import router
-from dotenv import load_dotenv  # <-- ADD THIS
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 import os
 
-# Load environment variables from .env
+from app.api.endpoints import router
+
 load_dotenv()
 
 app = FastAPI(
     title="RAG Pipeline API",
     description="Production-grade Retrieval-Augmented Generation API",
-    version="1.0.0"
+    version="1.0.0",
 )
 
-# Include endpoints
+cors_origins = os.getenv("CORS_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in cors_origins.split(",")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(router, prefix="/api")
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

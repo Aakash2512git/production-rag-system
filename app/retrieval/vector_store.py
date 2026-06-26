@@ -1,64 +1,57 @@
 # app/retrieval/vector_store.py
 
-from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+
+_store = None
 
 
 class VectorStore:
     def __init__(self):
-        # Load embedding model
+        from sentence_transformers import SentenceTransformer
+
         self.model = SentenceTransformer("all-MiniLM-L6-v2")
-
-        # Embedding dimension
         self.dimension = 384
-
-        # FAISS index
         self.index = faiss.IndexFlatL2(self.dimension)
-
-        # Store documents
         self.documents = []
 
     def add_text(self, text: str, metadata: dict = None):
-        """
-        Add a text chunk and metadata to the vector store.
-        """
-
         embedding = self.model.encode([text])
-
         self.index.add(np.array(embedding).astype("float32"))
-
         self.documents.append({
             "text": text,
-            "metadata": metadata or {}
+            "metadata": metadata or {},
         })
 
     def search(self, query: str, top_k: int = 5):
-        """
-        Search similar chunks.
-        """
-
         query_embedding = self.model.encode([query])
-
         distances, indices = self.index.search(
             np.array(query_embedding).astype("float32"),
-            top_k
+            top_k,
         )
 
         results = []
-
         for idx in indices[0]:
-
             if idx < len(self.documents):
-
                 results.append({
                     "text": self.documents[idx]["text"],
                     "metadata": self.documents[idx]["metadata"],
-                    "score": float(distances[0][0])
+                    "score": float(distances[0][0]),
                 })
 
         return results
 
 
-# Singleton instance
-vector_store = VectorStore()
+def get_vector_store() -> VectorStore:
+    global _store
+    if _store is None:
+        _store = VectorStore()
+    return _store
+
+
+class _LazyVectorStore:
+    def __getattr__(self, name):
+        return getattr(get_vector_store(), name)
+
+
+vector_store = _LazyVectorStore()
